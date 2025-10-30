@@ -1,0 +1,110 @@
+import logging
+import threading
+import time
+import socket
+from pwnagotchi import plugins
+import pwnagotchi.ui.components as components
+
+class BatteryStatus(plugins.Plugin):
+    __author__ = "RyanWires"
+    __version__ = "1.3.0"
+    __license__ = "GPL3"
+    __description__ = "Displays PiSugar battery %, voltage, current, and ETA in a ProbeNpwn-style UI."
+
+    def __init__(self):
+        self.ui_initialized = False
+        self.last_ui_update = 0
+        self.ui_update_interval = 5  # default seconds
+        self.ma_rating = None
+        self.data = {"percent": 0, "voltage": 0.0, "current": 0.0, "eta": "?"}
+        self.update_thread = threading.Thread(target=self._battery_loop, daemon=True)
+        self.update_thread.start()
+
+    def on_config_changed(self, config):
+        # Use dot-style config: main.plugins.battery_status.update_interval
+        plugin_cfg = config.get("main", {}).get("plugins", {}).get("battery_status", {})
+        self.ui_update_interval = plugin_cfg.get("update_interval", 5)
+        self.ma_rating = plugin_cfg.get("ma", None)
+
+    def on_ui_setup(self, ui):
+        if not self.ui_initialized:
+            ui.add_element(
+                "battery",
+                components.Text(
+                    position=(10, 60),
+                    value="Battery: --% | 0.00V | 0.00A | ETA: ?",
+                    color=255
+                )
+            )
+            self.ui_initialized = True
+
+    def on_ui_update(self, ui):
+        now = time.time()
+        if now - self.last_ui_update < self.ui_update_interval:
+            return
+        self.last_ui_update = now
+
+        percent = self.data.get("percent", 0)
+        voltage = self.data.get("voltage", 0.0)
+        current = self.data.get("current", 0.0)
+        eta = self.data.get("eta", "?")
+        ma_text = f" | MA:{self.ma_rating}" if self.ma_rating is not None else ""
+
+        text = f"Battery: {percent:.0f}% | {voltage:.2f}V | {current:.2f}A | ETA: {eta}{ma_text}"
+
+        with ui._lock:
+            ui.set("battery", text)
+
+    def _battery_loop(self):
+        while True:
+            try:
+                self.data = self._read_pisugar()
+            except Exception as e:
+                logging.error(f"[battery_status] Failed to read PiSugar: {e}")
+            time.sleep(self.ui_update_interval)
+
+    def _read_pisugar(self):
+        data = {"percent": 0, "voltage": 0.0, "current": 0.0, "eta": "?"}
+        try:
+            s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            s.connect("/tmp/pisugar-server.sock")
+
+            # Battery %
+            s.sendall(b"get battery\n")
+            resp = s.recv(1024).decode()
+            try:
+                data["percent"] = float(resp.strip().split(":")[-1])
+            except:
+                data["percent"] = 0
+
+            # Voltage
+            s.sendall(b"get battery_v\n")
+            resp = s.recv(1024).decode()
+            try:
+                data["voltage"] = float(resp.strip().split(":")[-1])
+            except:
+                data["voltage"] = 0.0
+
+            # Current (A)
+            s.sendall(b"get battery_i\n")
+            resp = s.recv(1024).decode()
+            try:
+                data["current"] = float(resp.strip().split(":")[-1])
+            except:
+                data["current"] = 0.0
+
+            s.close()
+
+            # ETA calculation for PiSugar 2 & 3
+            capacity_mAh = 1800 if data["voltage"] > 4.0 else 1200
+            current_mA = abs(data["current"] * 1000)
+            if current_mA > 50:
+                hours = (capacity_mAh * (data["percent"] / 100)) / current_mA
+                data["eta"] = f"{hours:.1f}h"
+            else:
+                data["eta"] = "∞"
+
+        except Exception as e:
+            logging.error(f"[battery_status] PiSugar read error: {e}")
+
+        return data
