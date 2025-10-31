@@ -1,5 +1,6 @@
 # Pwnagotchi_Plugins
 the 2 crashes sometimes and idk abt the 3 doesnt seem too but ill look into that soon maybe but yeah enjoy
+
 Run ```sudo apt install netcat-openbsd``` for netcat so it can grab the data it needs
 ## Battery_status_2
 ![alt text](https://github.com/Ryanwires/Pwnagotchi_Plugins/blob/main/pwnagotchi_3B2.png)
